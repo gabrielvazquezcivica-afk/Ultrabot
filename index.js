@@ -253,8 +253,7 @@ async function iniciarBot() {
         const conexion = new LibConnection();
         const client = await conexion.connect();
 
-        // Activamos configuraciones internas para mayor velocidad
-        client.setMaxListeners(0);
+        // 🚫 SE ELIMINÓ LA LÍNEA QUE DABA ERROR
 
         // Evento cuando ya está todo conectado y funcionando
         client.ev.on('connection.update', (actualizacion) => {
