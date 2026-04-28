@@ -12,7 +12,7 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PLUGINS_PATH = path.join(__dirname, 'plugins');
-let plugins = new Map();
+let plugins = [];
 
 // Variable para saber cuándo el bot ya está completamente listo
 let botListo = false;
@@ -35,7 +35,7 @@ function mostrarTitulo() {
 
 async function cargarPlugins() {
     const inicio = performance.now();
-    plugins.clear();
+    plugins = [];
 
     if (!fs.existsSync(PLUGINS_PATH)) {
         if (!config.system.omitirRegistrosInnecesarios) {
@@ -68,8 +68,8 @@ async function cargarPlugins() {
             const rutaCompleta = new URL(`./plugins/${archivo}`, import.meta.url);
             const complemento = await import(rutaCompleta);
 
-            if (complemento.default?.nombre && typeof complemento.default?.ejecutar === 'function') {
-                plugins.set(complemento.default.nombre, complemento.default);
+            if (complemento.default && typeof complemento.default === 'object' && complemento.default.handler) {
+                plugins.push(complemento.default);
                 if (!config.system.omitirRegistrosInnecesarios) {
                     console.log(chalk.green(`✅ Complemento cargado: ${archivo}`));
                 }
@@ -85,7 +85,7 @@ async function cargarPlugins() {
 
     const tiempoTotal = (performance.now() - inicio).toFixed(2);
     if (!config.system.omitirRegistrosInnecesarios) {
-        console.log(chalk.greenBright.bold(`\n✅ Carga completada en ${tiempoTotal}ms | Complementos activos: ${plugins.size}\n`));
+        console.log(chalk.greenBright.bold(`\n✅ Carga completada en ${tiempoTotal}ms | Complementos activos: ${plugins.length}\n`));
     }
 }
 
@@ -142,42 +142,79 @@ async function obtenerInfoComando(cliente, mensaje) {
 }
 
 /**
+ * Busca y ejecuta el comando correspondiente
+ */
+async function ejecutarComando(mensaje, cliente) {
+    const cuerpo = mensaje.body.trim().toLowerCase();
+    const prefijo = config.bot.prefix;
+
+    // Recorrer todos los complementos cargados
+    for (const complemento of plugins) {
+        const datos = complemento;
+        if (!datos || !datos.command) continue;
+
+        const comandosPermitidos = Array.isArray(datos.command) ? datos.command : [datos.command];
+        const comandoEncontrado = comandosPermitidos.some(cmd => cuerpo === `${prefijo}${cmd.toLowerCase()}`);
+
+        if (comandoEncontrado) {
+            // 🛡️ Validaciones de permisos
+            const esDueno = config.owner.jid.includes(mensaje.author || mensaje.from);
+            const esAdmin = mensaje.isGroup ? (await mensaje.getChat()).participants.some(p => p.id === mensaje.author && p.admin) : false;
+
+            if (datos.owner && !esDueno) {
+                return await cliente.sendMessage(mensaje.from, { text: config.messages.owner }, { quoted: mensaje });
+            }
+
+            if (datos.admin && !esAdmin) {
+                return await cliente.sendMessage(mensaje.from, { text: config.messages.admin }, { quoted: mensaje });
+            }
+
+            if (datos.group === true && !mensaje.isGroup) {
+                return await cliente.sendMessage(mensaje.from, { text: config.messages.group }, { quoted: mensaje });
+            }
+
+            if (datos.group === false && mensaje.isGroup) {
+                return await cliente.sendMessage(mensaje.from, { text: '⚠️ Este comando solo funciona en conversación privada' }, { quoted: mensaje });
+            }
+
+            // 🚀 Preparar parámetros que recibe el comando
+            const parametros = {
+                sock: cliente,
+                client: cliente,
+                from: mensaje.from,
+                reply: async (texto) => await cliente.sendMessage(mensaje.from, { text: texto }, { quoted: mensaje }),
+                pushName: (await mensaje.getContact()).pushname || 'Usuario',
+                plugins: plugins
+            };
+
+            // ⚡ Ejecutar función del comando
+            try {
+                await datos.handler(mensaje, parametros);
+            } catch (error) {
+                console.log(chalk.red(`⚠️ Error al ejecutar comando: ${error.message}`));
+                await cliente.sendMessage(mensaje.from, { text: config.messages.error }, { quoted: mensaje });
+            }
+
+            break;
+        }
+    }
+}
+
+/**
  * Procesa cada mensaje de forma eficiente y rápida
  */
 async function procesarMensaje(cliente, mensaje) {
     // Primero verificamos si cumple todas las condiciones
     if (!esMensajeValido(mensaje)) return;
 
-    // Mostramos la información detallada
+    // Mostramos la información detallada en consola
     await obtenerInfoComando(cliente, mensaje);
 
-    // Ejecución según configuración de velocidad
+    // Ejecutar el comando correspondiente
     if (config.system.procesarMensajesEnParalelo) {
-        const tareas = [];
-        for (const complemento of plugins.values()) {
-            tareas.push(
-                (async () => {
-                    try {
-                        await complemento.ejecutar(cliente, mensaje);
-                    } catch (err) {
-                        if (!config.system.omitirRegistrosInnecesarios) {
-                            console.log(chalk.red(`⚠️ Error en complemento ${complemento.nombre || 'desconocido'}: ${err.message}`));
-                        }
-                    }
-                })()
-            );
-        }
-        Promise.allSettled(tareas);
+        setImmediate(() => ejecutarComando(mensaje, cliente));
     } else {
-        for (const complemento of plugins.values()) {
-            try {
-                await complemento.ejecutar(cliente, mensaje);
-            } catch (err) {
-                if (!config.system.omitirRegistrosInnecesarios) {
-                    console.log(chalk.red(`⚠️ Error en complemento ${complemento.nombre || 'desconocido'}: ${err.message}`));
-                }
-            }
-        }
+        await ejecutarComando(mensaje, cliente);
     }
 }
 
@@ -238,3 +275,6 @@ async function iniciarBot() {
         setTimeout(() => iniciarBot(), 2000);
     }
 }
+
+// Inicio inmediato
+setImmediate(() => iniciarBot());
