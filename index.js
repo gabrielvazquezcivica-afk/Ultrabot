@@ -14,11 +14,16 @@ const PLUGINS_PATH = path.join(__dirname, 'plugins');
 let plugins = new Map();
 
 const CONFIG = {
-    omitirRegistrosInnecesarios: true,
+    omitirRegistrosInnecesarios: false,
     procesarMensajesEnParalelo: true,
     recargaRapida: true,
-    limitarProcesos: false
+    limitarProcesos: false,
+    prefijoComando: '!', // Puedes cambiarlo por el símbolo o letra que quieras
+    tiempoLimiteMensaje: 120000 // Ignora mensajes con más de 2 minutos de antigüedad
 };
+
+// Variable para saber cuándo el bot ya está completamente listo
+let botListo = false;
 
 function mostrarTitulo() {
     console.log(
@@ -32,7 +37,7 @@ function mostrarTitulo() {
     );
     console.log(chalk.cyan('='.repeat(60)));
     console.log(chalk.greenBright('🤖 BOT DE WHATSAPP - MODO ALTO RENDIMIENTO ACTIVADO'));
-    console.log(chalk.greenBright('⚡ Versión: 2.1.0 | Velocidad: MÁXIMA'));
+    console.log(chalk.greenBright('⚡ Versión: 2.2.0 | Velocidad: MÁXIMA | Funciones mejoradas'));
     console.log(chalk.cyan('='.repeat(60)) + '\n');
 }
 
@@ -92,9 +97,69 @@ async function cargarPlugins() {
     }
 }
 
-async function procesarMensaje(cliente, mensaje) {
-    if (!mensaje || !mensaje.body) return;
+/**
+ * Verifica si el mensaje es válido para ser procesado
+ */
+function esMensajeValido(mensaje) {
+    // No procesar si el bot aún no termina de iniciar o reiniciar
+    if (!botListo) return false;
 
+    // No procesar mensajes que no tengan contenido
+    if (!mensaje || !mensaje.body) return false;
+
+    // Ignorar mensajes antiguos
+    const tiempoActual = Date.now();
+    const tiempoMensaje = mensaje.timestamp * 1000;
+    if ((tiempoActual - tiempoMensaje) > CONFIG.tiempoLimiteMensaje) return false;
+
+    // Solo aceptar mensajes que empiecen con el prefijo definido (son comandos)
+    if (!mensaje.body.startsWith(CONFIG.prefijoComando)) return false;
+
+    return true;
+}
+
+/**
+ * Obtiene y muestra la información detallada del comando usado
+ */
+async function obtenerInfoComando(cliente, mensaje) {
+    let tipoChat = '';
+    let nombreLugar = '';
+    let nombreUsuario = '';
+    let comandoUsado = mensaje.body.trim();
+
+    // Verificar si es grupo o privado
+    if (mensaje.isGroup) {
+        tipoChat = '👥 GRUPO';
+        const chat = await mensaje.getChat();
+        nombreLugar = chat.name || 'Nombre no disponible';
+    } else {
+        tipoChat = '💬 CHAT PRIVADO';
+        nombreLugar = 'Conversación individual';
+    }
+
+    // Obtener datos de quien envió el mensaje
+    const contacto = await mensaje.getContact();
+    nombreUsuario = contacto.name || contacto.pushname || mensaje.author || mensaje.from.replace(/\D/g, '');
+
+    // Mostrar toda la información en consola
+    console.log(chalk.magenta('📋 REGISTRO DE COMANDO'));
+    console.log(chalk.magenta(`👤 Usuario: ${nombreUsuario}`));
+    console.log(chalk.magenta(`${tipoChat}: ${nombreLugar}`));
+    console.log(chalk.magenta(`⌨️ Comando: ${comandoUsado}`));
+    console.log(chalk.gray('----------------------------------------\n'));
+}
+
+/**
+ * Procesa cada mensaje de forma eficiente y rápida
+ */
+async function procesarMensaje(cliente, mensaje) {
+    // Primero verificamos si cumple todas las condiciones
+    if (!esMensajeValido(mensaje)) return;
+
+    // Mostramos la información detallada
+    await obtenerInfoComando(cliente, mensaje);
+
+    // Ejecución según configuración de velocidad
     if (CONFIG.procesarMensajesEnParalelo) {
         const tareas = [];
         for (const complemento of plugins.values()) {
@@ -124,31 +189,51 @@ async function procesarMensaje(cliente, mensaje) {
     }
 }
 
+/**
+ * Inicia todo el funcionamiento del bot con máxima optimización
+ */
 async function iniciarBot() {
     try {
+        // Al iniciar o reiniciar, marcamos que aún no está listo para ignorar mensajes pasados
+        botListo = false;
+
+        // Mostramos el título llamativo
         mostrarTitulo();
+
+        // Cargamos los complementos de inmediato
         await cargarPlugins();
 
+        // Iniciamos la conexión
         const conexion = new LibConnection();
         const client = await conexion.connect();
 
+        // Activamos configuraciones internas para mayor velocidad
         client.setMaxListeners(0);
 
         client.on('ready', () => {
+            // Ya está todo listo, ahora sí procesará mensajes nuevos
+            botListo = true;
             console.log(chalk.greenBright.bold('🚀 ¡UltraBot funcionando a máxima velocidad! Listo para responder al instante\n'));
         });
 
+        // Reinicio y recarga automática ultrarrápida
         client.on('disconnected', async (motivo) => {
             console.log(chalk.red.bold(`\n🔌 Desconexión detectada: ${motivo}`));
             console.log(chalk.yellow.bold('♻️ Reinicio automático inmediato...\n'));
 
+            // Marcamos como no listo para no leer mensajes antiguos durante el reinicio
+            botListo = false;
+
+            // Recarga rápida sin procesos innecesarios
             if (CONFIG.recargaRapida) {
                 await cargarPlugins();
             }
 
+            // Inicio inmediato sin tiempos de espera prolongados
             setImmediate(() => iniciarBot());
         });
 
+        // Recepción y procesamiento de mensajes optimizado
         client.on('message_create', async (mensaje) => {
             setImmediate(() => procesarMensaje(client, mensaje));
         });
@@ -157,9 +242,11 @@ async function iniciarBot() {
         console.log(chalk.red.bold(`\n❌ Error del sistema: ${error.message}`));
         console.log(chalk.yellow.bold('🔁 Reinicio automático en 2 segundos...\n'));
         
+        botListo = false;
         setTimeout(() => iniciarBot(), 2000);
     }
 }
 
+// Inicio inmediato
 setImmediate(() => iniciarBot());
-    
+                
