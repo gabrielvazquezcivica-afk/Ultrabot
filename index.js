@@ -5,6 +5,7 @@ import path from 'path';
 import { performance } from 'perf_hooks';
 import { fileURLToPath } from 'url';
 import LibConnection from './lib-connection.js';
+import config from './config.js';
 
 // Definir rutas correctas al usar módulos
 const __filename = fileURLToPath(import.meta.url);
@@ -13,22 +14,13 @@ const __dirname = path.dirname(__filename);
 const PLUGINS_PATH = path.join(__dirname, 'plugins');
 let plugins = new Map();
 
-const CONFIG = {
-    omitirRegistrosInnecesarios: false,
-    procesarMensajesEnParalelo: true,
-    recargaRapida: true,
-    limitarProcesos: false,
-    prefijoComando: '!', // Puedes cambiarlo por el símbolo o letra que quieras
-    tiempoLimiteMensaje: 120000 // Ignora mensajes con más de 2 minutos de antigüedad
-};
-
 // Variable para saber cuándo el bot ya está completamente listo
 let botListo = false;
 
 function mostrarTitulo() {
     console.log(
         chalk.blueBright.bold(
-            figlet.textSync('UltraBot', {
+            figlet.textSync(config.bot.name.replace(/𝐛/g, 'b'), {
                 font: 'Big',
                 horizontalLayout: 'default',
                 verticalLayout: 'default'
@@ -36,8 +28,8 @@ function mostrarTitulo() {
         )
     );
     console.log(chalk.cyan('='.repeat(60)));
-    console.log(chalk.greenBright('🤖 BOT DE WHATSAPP - MODO ALTO RENDIMIENTO ACTIVADO'));
-    console.log(chalk.greenBright('⚡ Versión: 2.2.0 | Velocidad: MÁXIMA | Funciones mejoradas'));
+    console.log(chalk.greenBright(`🤖 ${config.bot.description}`));
+    console.log(chalk.greenBright(`⚡ Versión: ${config.bot.version} | Velocidad: MÁXIMA | Funciones mejoradas`));
     console.log(chalk.cyan('='.repeat(60)) + '\n');
 }
 
@@ -46,11 +38,11 @@ async function cargarPlugins() {
     plugins.clear();
 
     if (!fs.existsSync(PLUGINS_PATH)) {
-        if (!CONFIG.omitirRegistrosInnecesarios) {
+        if (!config.system.omitirRegistrosInnecesarios) {
             console.log(chalk.yellow('⚠️ La carpeta de complementos no existe, se creará automáticamente...'));
         }
         fs.mkdirSync(PLUGINS_PATH, { recursive: true });
-        if (!CONFIG.omitirRegistrosInnecesarios) {
+        if (!config.system.omitirRegistrosInnecesarios) {
             console.log(chalk.green('✅ Carpeta creada correctamente\n'));
         }
         return;
@@ -61,13 +53,13 @@ async function cargarPlugins() {
         .map(archivo => archivo.name);
 
     if (archivos.length === 0) {
-        if (!CONFIG.omitirRegistrosInnecesarios) {
+        if (!config.system.omitirRegistrosInnecesarios) {
             console.log(chalk.yellow('⚠️ No se encontraron complementos para cargar\n'));
         }
         return;
     }
 
-    if (!CONFIG.omitirRegistrosInnecesarios) {
+    if (!config.system.omitirRegistrosInnecesarios) {
         console.log(chalk.blueBright(`🔄 Cargando ${archivos.length} complementos...`));
     }
 
@@ -78,12 +70,12 @@ async function cargarPlugins() {
 
             if (complemento.default?.nombre && typeof complemento.default?.ejecutar === 'function') {
                 plugins.set(complemento.default.nombre, complemento.default);
-                if (!CONFIG.omitirRegistrosInnecesarios) {
+                if (!config.system.omitirRegistrosInnecesarios) {
                     console.log(chalk.green(`✅ Complemento cargado: ${archivo}`));
                 }
             }
         } catch (error) {
-            if (!CONFIG.omitirRegistrosInnecesarios) {
+            if (!config.system.omitirRegistrosInnecesarios) {
                 console.log(chalk.red(`❌ Error al cargar ${archivo}: ${error.message}`));
             }
         }
@@ -92,7 +84,7 @@ async function cargarPlugins() {
     await Promise.all(promesasCarga);
 
     const tiempoTotal = (performance.now() - inicio).toFixed(2);
-    if (!CONFIG.omitirRegistrosInnecesarios) {
+    if (!config.system.omitirRegistrosInnecesarios) {
         console.log(chalk.greenBright.bold(`\n✅ Carga completada en ${tiempoTotal}ms | Complementos activos: ${plugins.size}\n`));
     }
 }
@@ -110,10 +102,10 @@ function esMensajeValido(mensaje) {
     // Ignorar mensajes antiguos
     const tiempoActual = Date.now();
     const tiempoMensaje = mensaje.timestamp * 1000;
-    if ((tiempoActual - tiempoMensaje) > CONFIG.tiempoLimiteMensaje) return false;
+    if ((tiempoActual - tiempoMensaje) > config.login.tiempoLimiteMensaje) return false;
 
     // Solo aceptar mensajes que empiecen con el prefijo definido (son comandos)
-    if (!mensaje.body.startsWith(CONFIG.prefijoComando)) return false;
+    if (!mensaje.body.startsWith(config.bot.prefix)) return false;
 
     return true;
 }
@@ -160,7 +152,7 @@ async function procesarMensaje(cliente, mensaje) {
     await obtenerInfoComando(cliente, mensaje);
 
     // Ejecución según configuración de velocidad
-    if (CONFIG.procesarMensajesEnParalelo) {
+    if (config.system.procesarMensajesEnParalelo) {
         const tareas = [];
         for (const complemento of plugins.values()) {
             tareas.push(
@@ -168,7 +160,7 @@ async function procesarMensaje(cliente, mensaje) {
                     try {
                         await complemento.ejecutar(cliente, mensaje);
                     } catch (err) {
-                        if (!CONFIG.omitirRegistrosInnecesarios) {
+                        if (!config.system.omitirRegistrosInnecesarios) {
                             console.log(chalk.red(`⚠️ Error en complemento ${complemento.nombre || 'desconocido'}: ${err.message}`));
                         }
                     }
@@ -181,7 +173,7 @@ async function procesarMensaje(cliente, mensaje) {
             try {
                 await complemento.ejecutar(cliente, mensaje);
             } catch (err) {
-                if (!CONFIG.omitirRegistrosInnecesarios) {
+                if (!config.system.omitirRegistrosInnecesarios) {
                     console.log(chalk.red(`⚠️ Error en complemento ${complemento.nombre || 'desconocido'}: ${err.message}`));
                 }
             }
@@ -225,7 +217,7 @@ async function iniciarBot() {
             botListo = false;
 
             // Recarga rápida sin procesos innecesarios
-            if (CONFIG.recargaRapida) {
+            if (config.system.recargaRapida) {
                 await cargarPlugins();
             }
 
@@ -246,7 +238,3 @@ async function iniciarBot() {
         setTimeout(() => iniciarBot(), 2000);
     }
 }
-
-// Inicio inmediato
-setImmediate(() => iniciarBot());
-                
