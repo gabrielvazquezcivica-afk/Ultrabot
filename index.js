@@ -1,17 +1,18 @@
-const chalk = require('chalk');
-const figlet = require('figlet');
-const fs = require('fs');
-const path = require('path');
-const { performance } = require('perf_hooks');
-const LibConnection = require('./lib-connection');
+import chalk from 'chalk';
+import figlet from 'figlet';
+import fs from 'fs';
+import path from 'path';
+import { performance } from 'perf_hooks';
+import { fileURLToPath } from 'url';
+import LibConnection from './lib-connection.js';
 
-// Ruta donde se encuentran tus complementos
+// Definir rutas correctas al usar módulos
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
 const PLUGINS_PATH = path.join(__dirname, 'plugins');
-
-// Almacén optimizado donde se guardarán los complementos cargados
 let plugins = new Map();
 
-// Configuración para máxima velocidad
 const CONFIG = {
     omitirRegistrosInnecesarios: true,
     procesarMensajesEnParalelo: true,
@@ -19,9 +20,6 @@ const CONFIG = {
     limitarProcesos: false
 };
 
-/**
- * Muestra el nombre del bot en grande y con estilo
- */
 function mostrarTitulo() {
     console.log(
         chalk.blueBright.bold(
@@ -38,9 +36,6 @@ function mostrarTitulo() {
     console.log(chalk.cyan('='.repeat(60)) + '\n');
 }
 
-/**
- * Carga o recarga todos los complementos de forma ultrarrápida
- */
 async function cargarPlugins() {
     const inicio = performance.now();
     plugins.clear();
@@ -56,7 +51,6 @@ async function cargarPlugins() {
         return;
     }
 
-    // Lectura rápida de archivos
     const archivos = fs.readdirSync(PLUGINS_PATH, { withFileTypes: true })
         .filter(archivo => archivo.isFile() && archivo.name.endsWith('.js'))
         .map(archivo => archivo.name);
@@ -72,17 +66,13 @@ async function cargarPlugins() {
         console.log(chalk.blueBright(`🔄 Cargando ${archivos.length} complementos...`));
     }
 
-    // Carga paralela para reducir tiempos
     const promesasCarga = archivos.map(async (archivo) => {
         try {
-            const rutaCompleta = path.join(PLUGINS_PATH, archivo);
-            // Eliminación inmediata de caché para actualización instantánea
-            delete require.cache[require.resolve(rutaCompleta)];
-            
-            const complemento = require(rutaCompleta);
-            
-            if (complemento.nombre && typeof complemento.ejecutar === 'function') {
-                plugins.set(complemento.nombre, complemento);
+            const rutaCompleta = new URL(`./plugins/${archivo}`, import.meta.url);
+            const complemento = await import(rutaCompleta);
+
+            if (complemento.default?.nombre && typeof complemento.default?.ejecutar === 'function') {
+                plugins.set(complemento.default.nombre, complemento.default);
                 if (!CONFIG.omitirRegistrosInnecesarios) {
                     console.log(chalk.green(`✅ Complemento cargado: ${archivo}`));
                 }
@@ -102,16 +92,10 @@ async function cargarPlugins() {
     }
 }
 
-/**
- * Procesa cada mensaje de forma eficiente y rápida
- */
 async function procesarMensaje(cliente, mensaje) {
-    // Filtrado rápido para no procesar lo que no es necesario
     if (!mensaje || !mensaje.body) return;
 
-    // Ejecución según configuración de velocidad
     if (CONFIG.procesarMensajesEnParalelo) {
-        // Ejecuta todos los complementos al mismo tiempo, sin esperar uno tras otro
         const tareas = [];
         for (const complemento of plugins.values()) {
             tareas.push(
@@ -126,10 +110,8 @@ async function procesarMensaje(cliente, mensaje) {
                 })()
             );
         }
-        // Espera a que terminen todas pero sin bloquear el flujo
         Promise.allSettled(tareas);
     } else {
-        // Ejecución secuencial pero optimizada
         for (const complemento of plugins.values()) {
             try {
                 await complemento.ejecutar(cliente, mensaje);
@@ -142,47 +124,32 @@ async function procesarMensaje(cliente, mensaje) {
     }
 }
 
-/**
- * Inicia todo el funcionamiento del bot con máxima optimización
- */
 async function iniciarBot() {
     try {
-        // Mostramos el título llamativo
         mostrarTitulo();
-
-        // Cargamos los complementos de inmediato
         await cargarPlugins();
 
-        // Iniciamos la conexión
         const conexion = new LibConnection();
         const client = await conexion.connect();
 
-        // Activamos configuraciones internas para mayor velocidad
-        client.setMaxListeners(0); // Eliminamos límite de eventos para no tener restricciones
-        client.pupPage.setBypassCSP(true);
-        client.pupPage.setJavaScriptEnabled(true);
+        client.setMaxListeners(0);
 
         client.on('ready', () => {
             console.log(chalk.greenBright.bold('🚀 ¡UltraBot funcionando a máxima velocidad! Listo para responder al instante\n'));
         });
 
-        // Reinicio y recarga automática ultrarrápida
         client.on('disconnected', async (motivo) => {
             console.log(chalk.red.bold(`\n🔌 Desconexión detectada: ${motivo}`));
             console.log(chalk.yellow.bold('♻️ Reinicio automático inmediato...\n'));
 
-            // Recarga rápida sin procesos innecesarios
             if (CONFIG.recargaRapida) {
                 await cargarPlugins();
             }
 
-            // Inicio inmediato sin tiempos de espera prolongados
             setImmediate(() => iniciarBot());
         });
 
-        // Recepción y procesamiento de mensajes optimizado
         client.on('message_create', async (mensaje) => {
-            // Enviamos el procesamiento para que no bloquee la recepción de otros mensajes
             setImmediate(() => procesarMensaje(client, mensaje));
         });
 
@@ -190,11 +157,9 @@ async function iniciarBot() {
         console.log(chalk.red.bold(`\n❌ Error del sistema: ${error.message}`));
         console.log(chalk.yellow.bold('🔁 Reinicio automático en 2 segundos...\n'));
         
-        // Tiempo de espera reducido ante errores
         setTimeout(() => iniciarBot(), 2000);
     }
 }
 
-// Inicio inmediato
 setImmediate(() => iniciarBot());
-                  
+    
