@@ -16,10 +16,10 @@ const config = {
 
   // ───── BOT ─────
   bot: {
-    name: '𝐔𝐥𝐭𝐫𝐚𝐁ot',
+    name: '𝐔𝐥𝐭𝐫𝐚𝐁𝐨𝐭',
     prefix: '.',
     public: true,
-    version: '2.2.0,',
+    version: '2.2.0',
     description: 'Bot de WhatsApp'
   },
 
@@ -56,10 +56,7 @@ const config = {
     admin: '⚠️ Este comando es solo para administradores del grupo',
     owner: '⚠️ Este comando es exclusivo para el dueño del bot',
     group: '⚠️ Este comando solo puede usarse dentro de grupos',
-    private: '⚠️ Este comando solo funciona en chat privado',
-    botAdmin: '⚠️ Necesito ser administrador del grupo para poder ejecutar esta acción',
-    notCommand: 'ℹ️ Ese contenido no es reconocido como un comando',
-    noPermission: '🚫 No tienes permiso para usar este comando'
+    botAdmin: '⚠️ Necesito ser administrador del grupo para poder ejecutar esta acción'
   }
 
 }
