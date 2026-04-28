@@ -97,15 +97,23 @@ function esMensajeValido(mensaje) {
     if (!botListo) return false;
 
     // No procesar mensajes que no tengan contenido
-    if (!mensaje || !mensaje.body) return false;
+    if (!mensaje || !mensaje.message) return false;
+
+    // Extraemos el texto del mensaje
+    const contenido = mensaje.message.conversation || 
+                      mensaje.message.extendedTextMessage?.text || 
+                      '';
+
+    if (!contenido) return false;
+    mensaje.body = contenido;
 
     // Ignorar mensajes antiguos
     const tiempoActual = Date.now();
-    const tiempoMensaje = mensaje.timestamp * 1000;
+    const tiempoMensaje = (mensaje.messageTimestamp || 0) * 1000;
     if ((tiempoActual - tiempoMensaje) > config.login.tiempoLimiteMensaje) return false;
 
     // Solo aceptar mensajes que empiecen con el prefijo definido (son comandos)
-    if (!mensaje.body.startsWith(config.bot.prefix)) return false;
+    if (!contenido.startsWith(config.bot.prefix)) return false;
 
     return true;
 }
@@ -118,20 +126,20 @@ async function obtenerInfoComando(cliente, mensaje) {
     let nombreLugar = '';
     let nombreUsuario = '';
     let comandoUsado = mensaje.body.trim();
+    const esGrupo = mensaje.key.remoteJid.endsWith('@g.us');
 
     // Verificar si es grupo o privado
-    if (mensaje.isGroup) {
+    if (esGrupo) {
         tipoChat = '👥 GRUPO';
-        const chat = await mensaje.getChat();
-        nombreLugar = chat.name || 'Nombre no disponible';
+        const metadata = await cliente.groupMetadata(mensaje.key.remoteJid).catch(() => null);
+        nombreLugar = metadata?.subject || 'Nombre no disponible';
     } else {
         tipoChat = '💬 CHAT PRIVADO';
         nombreLugar = 'Conversación individual';
     }
 
     // Obtener datos de quien envió el mensaje
-    const contacto = await mensaje.getContact();
-    nombreUsuario = contacto.name || contacto.pushname || mensaje.author || mensaje.from.replace(/\D/g, '');
+    nombreUsuario = mensaje.pushName || mensaje.key.participant || mensaje.key.remoteJid.split('@')[0] || 'Usuario desconocido';
 
     // Mostrar toda la información en consola
     console.log(chalk.magenta('📋 REGISTRO DE COMANDO'));
@@ -147,6 +155,8 @@ async function obtenerInfoComando(cliente, mensaje) {
 async function ejecutarComando(mensaje, cliente) {
     const cuerpo = mensaje.body.trim().toLowerCase();
     const prefijo = config.bot.prefix;
+    const remitente = mensaje.key.participant || mensaje.key.remoteJid;
+    const esGrupo = mensaje.key.remoteJid.endsWith('@g.us');
 
     // Recorrer todos los complementos cargados
     for (const complemento of plugins) {
@@ -158,32 +168,39 @@ async function ejecutarComando(mensaje, cliente) {
 
         if (comandoEncontrado) {
             // 🛡️ Validaciones de permisos
-            const esDueno = config.owner.jid.includes(mensaje.author || mensaje.from);
-            const esAdmin = mensaje.isGroup ? (await mensaje.getChat()).participants.some(p => p.id === mensaje.author && p.admin) : false;
+            const esDueno = config.owner.jid.some(id => id === remitente || id === mensaje.key.remoteJid);
+            let esAdmin = false;
+
+            if (esGrupo) {
+                const datosGrupo = await cliente.groupMetadata(mensaje.key.remoteJid).catch(() => null);
+                esAdmin = datosGrupo?.participants.some(miembro => 
+                    miembro.id === remitente && (miembro.admin === 'admin' || miembro.admin === 'superadmin')
+                ) || false;
+            }
 
             if (datos.owner && !esDueno) {
-                return await cliente.sendMessage(mensaje.from, { text: config.messages.owner }, { quoted: mensaje });
+                return await cliente.sendMessage(mensaje.key.remoteJid, { text: config.messages.owner }, { quoted: mensaje });
             }
 
             if (datos.admin && !esAdmin) {
-                return await cliente.sendMessage(mensaje.from, { text: config.messages.admin }, { quoted: mensaje });
+                return await cliente.sendMessage(mensaje.key.remoteJid, { text: config.messages.admin }, { quoted: mensaje });
             }
 
-            if (datos.group === true && !mensaje.isGroup) {
-                return await cliente.sendMessage(mensaje.from, { text: config.messages.group }, { quoted: mensaje });
+            if (datos.group === true && !esGrupo) {
+                return await cliente.sendMessage(mensaje.key.remoteJid, { text: config.messages.group }, { quoted: mensaje });
             }
 
-            if (datos.group === false && mensaje.isGroup) {
-                return await cliente.sendMessage(mensaje.from, { text: '⚠️ Este comando solo funciona en conversación privada' }, { quoted: mensaje });
+            if (datos.group === false && esGrupo) {
+                return await cliente.sendMessage(mensaje.key.remoteJid, { text: '⚠️ Este comando solo funciona en conversación privada' }, { quoted: mensaje });
             }
 
             // 🚀 Preparar parámetros que recibe el comando
             const parametros = {
                 sock: cliente,
                 client: cliente,
-                from: mensaje.from,
-                reply: async (texto) => await cliente.sendMessage(mensaje.from, { text: texto }, { quoted: mensaje }),
-                pushName: (await mensaje.getContact()).pushname || 'Usuario',
+                from: mensaje.key.remoteJid,
+                reply: async (texto) => await cliente.sendMessage(mensaje.key.remoteJid, { text: texto }, { quoted: mensaje }),
+                pushName: mensaje.pushname || 'Usuario',
                 plugins: plugins
             };
 
@@ -192,7 +209,7 @@ async function ejecutarComando(mensaje, cliente) {
                 await datos.handler(mensaje, parametros);
             } catch (error) {
                 console.log(chalk.red(`⚠️ Error al ejecutar comando: ${error.message}`));
-                await cliente.sendMessage(mensaje.from, { text: config.messages.error }, { quoted: mensaje });
+                await cliente.sendMessage(mensaje.key.remoteJid, { text: config.messages.error }, { quoted: mensaje });
             }
 
             break;
@@ -239,32 +256,35 @@ async function iniciarBot() {
         // Activamos configuraciones internas para mayor velocidad
         client.setMaxListeners(0);
 
-        client.on('ready', () => {
-            // Ya está todo listo, ahora sí procesará mensajes nuevos
-            botListo = true;
-            console.log(chalk.greenBright.bold('🚀 ¡UltraBot funcionando a máxima velocidad! Listo para responder al instante\n'));
-        });
-
-        // Reinicio y recarga automática ultrarrápida
-        client.on('disconnected', async (motivo) => {
-            console.log(chalk.red.bold(`\n🔌 Desconexión detectada: ${motivo}`));
-            console.log(chalk.yellow.bold('♻️ Reinicio automático inmediato...\n'));
-
-            // Marcamos como no listo para no leer mensajes antiguos durante el reinicio
-            botListo = false;
-
-            // Recarga rápida sin procesos innecesarios
-            if (config.system.recargaRapida) {
-                await cargarPlugins();
+        // Evento cuando ya está todo conectado y funcionando
+        client.ev.on('connection.update', (actualizacion) => {
+            const { connection } = actualizacion;
+            if (connection === 'open') {
+                // Ya está todo listo, ahora sí procesará mensajes nuevos
+                botListo = true;
+                console.log(chalk.greenBright.bold('🚀 ¡UltraBot funcionando a máxima velocidad! Listo para responder al instante\n'));
             }
 
-            // Inicio inmediato sin tiempos de espera prolongados
-            setImmediate(() => iniciarBot());
+            if (connection === 'close') {
+                console.log(chalk.red.bold(`\n🔌 Desconexión detectada`));
+                console.log(chalk.yellow.bold('♻️ Reinicio automático inmediato...\n'));
+
+                botListo = false;
+
+                if (config.system.recargaRapida) {
+                    cargarPlugins();
+                }
+
+                setImmediate(() => iniciarBot());
+            }
         });
 
         // Recepción y procesamiento de mensajes optimizado
-        client.on('message_create', async (mensaje) => {
-            setImmediate(() => procesarMensaje(client, mensaje));
+        client.ev.on('messages.upsert', async ({ messages }) => {
+            const mensaje = messages[0];
+            if (!mensaje.key.fromMe) {
+                setImmediate(() => procesarMensaje(client, mensaje));
+            }
         });
 
     } catch (error) {
@@ -278,3 +298,4 @@ async function iniciarBot() {
 
 // Inicio inmediato
 setImmediate(() => iniciarBot());
+                
