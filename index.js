@@ -4,7 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { performance } from 'perf_hooks';
 import { fileURLToPath } from 'url';
-import LibConnection from './lib-connection.js';
+import LibConnection from './lib/lib-connection.js';
 import config from './config.js';
 
 // Definir rutas correctas al usar módulos
