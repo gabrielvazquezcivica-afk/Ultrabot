@@ -7,16 +7,19 @@ import { fileURLToPath } from 'url';
 import LibConnection from './lib/connection.js';
 import config from './config.js';
 
-// Definir rutas correctas al usar módulos
+// Rutas
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
 const PLUGINS_PATH = path.join(__dirname, 'plugins');
-let plugins = [];
 
-// Variable para saber cuándo el bot ya está completamente listo
+let plugins = [];
 let botListo = false;
 
+// 🔥 CONTROL DE SOCKET
+let clientActivo = null;
+
+// 🎨 TÍTULO
 function mostrarTitulo() {
     console.log(
         chalk.blueBright.bold(
@@ -27,189 +30,150 @@ function mostrarTitulo() {
             })
         )
     );
+
     console.log(chalk.cyan('='.repeat(60)));
     console.log(chalk.greenBright(`🤖 ${config.bot.description}`));
     console.log(chalk.greenBright(`⚡ Versión: ${config.bot.version} | Velocidad: MÁXIMA | Funciones mejoradas`));
     console.log(chalk.cyan('='.repeat(60)) + '\n');
 }
 
+// 📦 CARGAR PLUGINS
 async function cargarPlugins() {
     const inicio = performance.now();
     plugins = [];
 
     if (!fs.existsSync(PLUGINS_PATH)) {
-        if (!config.system.omitirRegistrosInnecesarios) {
-            console.log(chalk.yellow('⚠️ La carpeta de complementos no existe, se creará automáticamente...'));
-        }
+        console.log(chalk.yellow('⚠️ La carpeta plugins no existe, creando...'));
         fs.mkdirSync(PLUGINS_PATH, { recursive: true });
-        if (!config.system.omitirRegistrosInnecesarios) {
-            console.log(chalk.green('✅ Carpeta creada correctamente\n'));
-        }
+        console.log(chalk.green('✅ Carpeta creada\n'));
         return;
     }
 
     const archivos = fs.readdirSync(PLUGINS_PATH, { withFileTypes: true })
-        .filter(archivo => archivo.isFile() && archivo.name.endsWith('.js'))
-        .map(archivo => archivo.name);
+        .filter(a => a.isFile() && a.name.endsWith('.js'))
+        .map(a => a.name);
 
     if (archivos.length === 0) {
-        if (!config.system.omitirRegistrosInnecesarios) {
-            console.log(chalk.yellow('⚠️ No se encontraron complementos para cargar\n'));
-        }
+        console.log(chalk.yellow('⚠️ No hay plugins\n'));
         return;
     }
 
-    if (!config.system.omitirRegistrosInnecesarios) {
-        console.log(chalk.blueBright(`🔄 Cargando ${archivos.length} complementos...`));
-    }
+    console.log(chalk.blueBright(`🔄 Cargando ${archivos.length} plugins...\n`));
 
-    const promesasCarga = archivos.map(async (archivo) => {
-        try {
-            const rutaCompleta = new URL(`./plugins/${archivo}`, import.meta.url);
-            const complemento = await import(rutaCompleta);
+    await Promise.all(
+        archivos.map(async (archivo) => {
+            try {
+                const ruta = new URL(`./plugins/${archivo}`, import.meta.url);
+                const plugin = await import(ruta);
 
-            if (complemento.default && typeof complemento.default === 'object' && complemento.default.handler) {
-                plugins.push(complemento.default);
-                if (!config.system.omitirRegistrosInnecesarios) {
-                    console.log(chalk.green(`✅ Complemento cargado: ${archivo}`));
+                if (plugin.default?.handler) {
+                    plugins.push(plugin.default);
+                    console.log(chalk.green(`✅ ${archivo}`));
                 }
+            } catch (err) {
+                console.log(chalk.red(`❌ ${archivo}: ${err.message}`));
             }
-        } catch (error) {
-            if (!config.system.omitirRegistrosInnecesarios) {
-                console.log(chalk.red(`❌ Error al cargar ${archivo}: ${error.message}`));
-            }
-        }
-    });
+        })
+    );
 
-    await Promise.all(promesasCarga);
-
-    const tiempoTotal = (performance.now() - inicio).toFixed(2);
-    if (!config.system.omitirRegistrosInnecesarios) {
-        console.log(chalk.greenBright.bold(`\n✅ Carga completada en ${tiempoTotal}ms | Complementos activos: ${plugins.length}\n`));
-    }
+    console.log(
+        chalk.greenBright.bold(
+            `\n⚡ Carga completada en ${(performance.now() - inicio).toFixed(2)}ms | Plugins: ${plugins.length}\n`
+        )
+    );
 }
 
-/**
- * Verifica si el mensaje es válido para ser procesado
- */
-function esMensajeValido(mensaje) {
-    // No procesar si el bot aún no termina de iniciar o reiniciar
+// 🧠 VALIDAR MENSAJE
+function esMensajeValido(m) {
     if (!botListo) return false;
+    if (!m || !m.message) return false;
 
-    // No procesar mensajes que no tengan contenido
-    if (!mensaje || !mensaje.message) return false;
+    const texto =
+        m.message.conversation ||
+        m.message.extendedTextMessage?.text ||
+        '';
 
-    // Extraemos el texto del mensaje
-    const contenido = mensaje.message.conversation || 
-                      mensaje.message.extendedTextMessage?.text || 
-                      '';
+    if (!texto) return false;
 
-    if (!contenido) return false;
-    mensaje.body = contenido;
+    m.body = texto;
 
-    // Ignorar mensajes antiguos
-    const tiempoActual = Date.now();
-    const tiempoMensaje = (mensaje.messageTimestamp || 0) * 1000;
-    if ((tiempoActual - tiempoMensaje) > config.login.tiempoLimiteMensaje) return false;
+    const ahora = Date.now();
+    const tiempoMsg = (m.messageTimestamp || 0) * 1000;
 
-    // Solo aceptar mensajes que empiecen con el prefijo definido (son comandos)
-    if (!contenido.startsWith(config.bot.prefix)) return false;
+    if ((ahora - tiempoMsg) > config.login.tiempoLimiteMensaje) return false;
+
+    if (!texto.startsWith(config.bot.prefix)) return false;
 
     return true;
 }
 
-/**
- * Obtiene y muestra la información detallada del comando usado
- */
-async function obtenerInfoComando(cliente, mensaje) {
-    let tipoChat = '';
-    let nombreLugar = '';
-    let nombreUsuario = '';
-    let comandoUsado = mensaje.body.trim();
-    const esGrupo = mensaje.key.remoteJid.endsWith('@g.us');
+// 📋 INFO COMANDO
+async function obtenerInfoComando(client, m) {
+    const esGrupo = m.key.remoteJid.endsWith('@g.us');
 
-    // Verificar si es grupo o privado
+    let tipo = esGrupo ? '👥 GRUPO' : '💬 PRIVADO';
+    let lugar = 'Chat';
+
     if (esGrupo) {
-        tipoChat = '👥 GRUPO';
-        const metadata = await cliente.groupMetadata(mensaje.key.remoteJid).catch(() => null);
-        nombreLugar = metadata?.subject || 'Nombre no disponible';
-    } else {
-        tipoChat = '💬 CHAT PRIVADO';
-        nombreLugar = 'Conversación individual';
+        const meta = await client.groupMetadata(m.key.remoteJid).catch(() => null);
+        lugar = meta?.subject || 'Grupo';
     }
 
-    // Obtener datos de quien envió el mensaje
-    nombreUsuario = mensaje.pushName || mensaje.key.participant || mensaje.key.remoteJid.split('@')[0] || 'Usuario desconocido';
+    const user =
+        m.pushName ||
+        m.key.participant ||
+        m.key.remoteJid.split('@')[0];
 
-    // Mostrar toda la información en consola
-    console.log(chalk.magenta('📋 REGISTRO DE COMANDO'));
-    console.log(chalk.magenta(`👤 Usuario: ${nombreUsuario}`));
-    console.log(chalk.magenta(`${tipoChat}: ${nombreLugar}`));
-    console.log(chalk.magenta(`⌨️ Comando: ${comandoUsado}`));
-    console.log(chalk.gray('----------------------------------------\n'));
+    console.log(chalk.magenta('📋 COMANDO'));
+    console.log(chalk.magenta(`👤 ${user}`));
+    console.log(chalk.magenta(`${tipo}: ${lugar}`));
+    console.log(chalk.magenta(`⌨️ ${m.body}`));
+    console.log(chalk.gray('----------------------\n'));
 }
 
-/**
- * Busca y ejecuta el comando correspondiente
- */
-async function ejecutarComando(mensaje, cliente) {
-    const cuerpo = mensaje.body.trim().toLowerCase();
+// ⚡ EJECUTAR COMANDO
+async function ejecutarComando(m, client) {
+    const body = m.body.toLowerCase().trim();
     const prefijo = config.bot.prefix;
-    const remitente = mensaje.key.participant || mensaje.key.remoteJid;
-    const esGrupo = mensaje.key.remoteJid.endsWith('@g.us');
+    const remitente = m.key.participant || m.key.remoteJid;
+    const esGrupo = m.key.remoteJid.endsWith('@g.us');
 
-    // Recorrer todos los complementos cargados
-    for (const complemento of plugins) {
-        const datos = complemento;
-        if (!datos || !datos.command) continue;
+    for (const p of plugins) {
+        if (!p.command) continue;
 
-        const comandosPermitidos = Array.isArray(datos.command) ? datos.command : [datos.command];
-        const comandoEncontrado = comandosPermitidos.some(cmd => cuerpo === `${prefijo}${cmd.toLowerCase()}`);
+        const cmds = Array.isArray(p.command) ? p.command : [p.command];
 
-        if (comandoEncontrado) {
-            // 🛡️ Validaciones de permisos
-            const esDueno = config.owner.jid.some(id => id === remitente || id === mensaje.key.remoteJid);
+        if (cmds.some(c => body === prefijo + c.toLowerCase())) {
+
+            const esDueno = config.owner.jid.includes(remitente);
+
             let esAdmin = false;
-
             if (esGrupo) {
-                const datosGrupo = await cliente.groupMetadata(mensaje.key.remoteJid).catch(() => null);
-                esAdmin = datosGrupo?.participants.some(miembro => 
-                    miembro.id === remitente && (miembro.admin === 'admin' || miembro.admin === 'superadmin')
-                ) || false;
+                const meta = await client.groupMetadata(m.key.remoteJid).catch(() => null);
+                esAdmin = meta?.participants.some(x =>
+                    x.id === remitente && (x.admin === 'admin' || x.admin === 'superadmin')
+                );
             }
 
-            if (datos.owner && !esDueno) {
-                return await cliente.sendMessage(mensaje.key.remoteJid, { text: config.messages.owner }, { quoted: mensaje });
+            if (p.owner && !esDueno) {
+                return client.sendMessage(m.key.remoteJid, { text: config.messages.owner }, { quoted: m });
             }
 
-            if (datos.admin && !esAdmin) {
-                return await cliente.sendMessage(mensaje.key.remoteJid, { text: config.messages.admin }, { quoted: mensaje });
+            if (p.admin && !esAdmin) {
+                return client.sendMessage(m.key.remoteJid, { text: config.messages.admin }, { quoted: m });
             }
 
-            if (datos.group === true && !esGrupo) {
-                return await cliente.sendMessage(mensaje.key.remoteJid, { text: config.messages.group }, { quoted: mensaje });
-            }
-
-            if (datos.group === false && esGrupo) {
-                return await cliente.sendMessage(mensaje.key.remoteJid, { text: '⚠️ Este comando solo funciona en conversación privada' }, { quoted: mensaje });
-            }
-
-            // 🚀 Preparar parámetros que recibe el comando
-            const parametros = {
-                sock: cliente,
-                client: cliente,
-                from: mensaje.key.remoteJid,
-                reply: async (texto) => await cliente.sendMessage(mensaje.key.remoteJid, { text: texto }, { quoted: mensaje }),
-                pushName: mensaje.pushname || 'Usuario',
-                plugins: plugins
-            };
-
-            // ⚡ Ejecutar función del comando
             try {
-                await datos.handler(mensaje, parametros);
-            } catch (error) {
-                console.log(chalk.red(`⚠️ Error al ejecutar comando: ${error.message}`));
-                await cliente.sendMessage(mensaje.key.remoteJid, { text: config.messages.error }, { quoted: mensaje });
+                await p.handler(m, {
+                    sock: client,
+                    client,
+                    from: m.key.remoteJid,
+                    reply: (txt) => client.sendMessage(m.key.remoteJid, { text: txt }, { quoted: m }),
+                    pushName: m.pushName || 'Usuario',
+                    plugins
+                });
+            } catch (err) {
+                console.log(chalk.red(`❌ Error: ${err.message}`));
             }
 
             break;
@@ -217,83 +181,62 @@ async function ejecutarComando(mensaje, cliente) {
     }
 }
 
-/**
- * Procesa cada mensaje de forma eficiente y rápida
- */
-async function procesarMensaje(cliente, mensaje) {
-    // Primero verificamos si cumple todas las condiciones
-    if (!esMensajeValido(mensaje)) return;
+// 📩 PROCESAR MENSAJE
+async function procesarMensaje(client, m) {
+    if (!esMensajeValido(m)) return;
 
-    // Mostramos la información detallada en consola
-    await obtenerInfoComando(cliente, mensaje);
+    await obtenerInfoComando(client, m);
 
-    // Ejecutar el comando correspondiente
     if (config.system.procesarMensajesEnParalelo) {
-        setImmediate(() => ejecutarComando(mensaje, cliente));
+        setImmediate(() => ejecutarComando(m, client));
     } else {
-        await ejecutarComando(mensaje, cliente);
+        await ejecutarComando(m, client);
     }
 }
 
-/**
- * Inicia todo el funcionamiento del bot con máxima optimización
- */
+// 🚀 INICIAR BOT
 async function iniciarBot() {
     try {
-        // Al iniciar o reiniciar, marcamos que aún no está listo para ignorar mensajes pasados
+        if (clientActivo) return;
+
         botListo = false;
 
-        // Mostramos el título llamativo
         mostrarTitulo();
-
-        // Cargamos los complementos de inmediato
         await cargarPlugins();
 
-        // Iniciamos la conexión
         const conexion = new LibConnection();
         const client = await conexion.connect();
 
-        // 🚫 SE ELIMINÓ LA LÍNEA QUE DABA ERROR
+        clientActivo = client;
 
-        // Evento cuando ya está todo conectado y funcionando
-        client.ev.on('connection.update', (actualizacion) => {
-            const { connection } = actualizacion;
+        client.ev.on('connection.update', ({ connection }) => {
+
             if (connection === 'open') {
-                // Ya está todo listo, ahora sí procesará mensajes nuevos
                 botListo = true;
-                console.log(chalk.greenBright.bold('🚀 ¡UltraBot funcionando a máxima velocidad! Listo para responder al instante\n'));
+                console.log(chalk.greenBright.bold('\n🚀 UltraBot listo\n'));
             }
 
             if (connection === 'close') {
-                console.log(chalk.red.bold(`\n🔌 Desconexión detectada`));
-                console.log(chalk.yellow.bold('♻️ Reinicio automático inmediato...\n'));
-
+                console.log(chalk.red('\n🔌 Desconectado'));
                 botListo = false;
-
-                if (config.system.recargaRapida) {
-                    cargarPlugins();
-                }
-
-                setImmediate(() => iniciarBot());
+                clientActivo = null;
+                // ❌ NO reiniciar aquí
             }
         });
 
-        // Recepción y procesamiento de mensajes optimizado
-        client.ev.on('messages.upsert', async ({ messages }) => {
-            const mensaje = messages[0];
-            if (!mensaje.key.fromMe) {
-                setImmediate(() => procesarMensaje(client, mensaje));
+        client.ev.on('messages.upsert', ({ messages }) => {
+            const m = messages[0];
+            if (!m.key.fromMe) {
+                procesarMensaje(client, m);
             }
         });
 
-    } catch (error) {
-        console.log(chalk.red.bold(`\n❌ Error del sistema: ${error.message}`));
-        console.log(chalk.yellow.bold('🔁 Reinicio automático en 2 segundos...\n'));
-        
-        botListo = false;
-        setTimeout(() => iniciarBot(), 2000);
+    } catch (err) {
+        console.log(chalk.red(`❌ Error: ${err.message}`));
+        clientActivo = null;
+        setTimeout(iniciarBot, 3000);
     }
 }
 
-// Inicio inmediato
-setImmediate(() => iniciarBot());
+// START
+iniciarBot();
